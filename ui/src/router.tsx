@@ -9,6 +9,8 @@ import { LoginPage } from '@/pages/LoginPage'
 import { AdminPage } from '@/pages/AdminPage'
 import { ApiKeysPage } from '@/pages/ApiKeysPage'
 import { ComparePage } from '@/pages/ComparePage'
+import { ApiDocsPage } from '@/pages/ApiDocsPage'
+import { QueryBuilderPage } from '@/pages/QueryBuilderPage'
 
 const rootRoute = createRootRoute({
   component: RootLayout,
@@ -76,6 +78,18 @@ const compareRoute = createRoute({
   component: ComparePage,
 })
 
+const apiDocsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/api-docs',
+  component: ApiDocsPage,
+})
+
+const queryRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/query',
+  component: QueryBuilderPage,
+})
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   runsRoute,
@@ -87,6 +101,8 @@ const routeTree = rootRoute.addChildren([
   adminRoute,
   apiKeysRoute,
   compareRoute,
+  apiDocsRoute,
+  queryRoute,
 ])
 
 export const router = createRouter({ routeTree })
