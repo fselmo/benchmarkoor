@@ -35,6 +35,11 @@ type Store interface {
 
 	ListAllRuns(ctx context.Context) ([]Run, error)
 
+	GetRunByRunID(ctx context.Context, runID string) (*Run, error)
+	DeleteRun(ctx context.Context, runID string) error
+	DeleteRunCascade(ctx context.Context, runID string) error
+	DeleteOrphanedSuite(ctx context.Context, suiteHash string) error
+
 	UpsertSuite(ctx context.Context, suite *Suite) error
 
 	BulkInsertTestStatsBlockLogs(
@@ -198,6 +203,112 @@ func (s *store) ListAllRuns(ctx context.Context) ([]Run, error) {
 	}
 
 	return runs, nil
+}
+
+// GetRunByRunID returns a single run by its run ID.
+func (s *store) GetRunByRunID(
+	ctx context.Context, runID string,
+) (*Run, error) {
+	var run Run
+	if err := s.db.WithContext(ctx).
+		Where("run_id = ?", runID).
+		First(&run).Error; err != nil {
+		return nil, fmt.Errorf("getting run by run_id: %w", err)
+	}
+
+	return &run, nil
+}
+
+// DeleteRun removes a run record by run ID.
+func (s *store) DeleteRun(
+	ctx context.Context, runID string,
+) error {
+	if err := s.db.WithContext(ctx).
+		Where("run_id = ?", runID).
+		Delete(&Run{}).Error; err != nil {
+		return fmt.Errorf("deleting run: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteRunCascade deletes a run and all related rows (test_stats,
+// test_stats_block_logs, and the orphaned suite) in a single transaction.
+func (s *store) DeleteRunCascade(
+	ctx context.Context, runID string,
+) error {
+	// Look up the run first so we know the suite_hash for orphan cleanup.
+	var run Run
+	if err := s.db.WithContext(ctx).
+		Where("run_id = ?", runID).
+		First(&run).Error; err != nil {
+		return fmt.Errorf("looking up run: %w", err)
+	}
+
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("run_id = ?", runID).
+			Delete(&TestStat{}).Error; err != nil {
+			return fmt.Errorf("deleting test stats: %w", err)
+		}
+
+		if err := tx.Where("run_id = ?", runID).
+			Delete(&TestStatsBlockLog{}).Error; err != nil {
+			return fmt.Errorf("deleting block logs: %w", err)
+		}
+
+		if err := tx.Where("run_id = ?", runID).
+			Delete(&Run{}).Error; err != nil {
+			return fmt.Errorf("deleting run: %w", err)
+		}
+
+		// Clean up suite if no other runs reference it.
+		if run.SuiteHash != "" {
+			var count int64
+			if err := tx.Model(&Run{}).
+				Where("suite_hash = ?", run.SuiteHash).
+				Count(&count).Error; err != nil {
+				return fmt.Errorf("counting runs for suite: %w", err)
+			}
+
+			if count == 0 {
+				if err := tx.Where("suite_hash = ?", run.SuiteHash).
+					Delete(&Suite{}).Error; err != nil {
+					return fmt.Errorf("deleting orphaned suite: %w", err)
+				}
+			}
+		}
+
+		return nil
+	})
+}
+
+// DeleteOrphanedSuite deletes a suite if no runs reference it anymore.
+func (s *store) DeleteOrphanedSuite(
+	ctx context.Context, suiteHash string,
+) error {
+	if suiteHash == "" {
+		return nil
+	}
+
+	var count int64
+	if err := s.db.WithContext(ctx).
+		Model(&Run{}).
+		Where("suite_hash = ?", suiteHash).
+		Count(&count).Error; err != nil {
+		return fmt.Errorf("counting runs for suite: %w", err)
+	}
+
+	if count > 0 {
+		return nil
+	}
+
+	if err := s.db.WithContext(ctx).
+		Where("suite_hash = ?", suiteHash).
+		Delete(&Suite{}).Error; err != nil {
+		return fmt.Errorf("deleting orphaned suite: %w", err)
+	}
+
+	return nil
 }
 
 // ListRunIDs returns just the run IDs for a given discovery path.
