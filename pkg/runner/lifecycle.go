@@ -587,6 +587,14 @@ func (r *runner) runContainerLifecycle(
 				}
 				return nil
 			}(),
+			PostTestSleepDuration: func() string {
+				if r.cfg.FullConfig != nil {
+					if d := r.cfg.FullConfig.GetPostTestSleepDuration(instance); d > 0 {
+						return d.String()
+					}
+				}
+				return ""
+			}(),
 			BootstrapFCU: func() *config.BootstrapFCUConfig {
 				if r.cfg.FullConfig != nil {
 					return r.cfg.FullConfig.GetBootstrapFCU(instance)
@@ -1038,6 +1046,7 @@ func (r *runner) runContainerLifecycle(
 				BlockLogCollector:             params.BlockLogCollector,
 				RetryNewPayloadsSyncingConfig: r.cfg.FullConfig.GetRetryNewPayloadsSyncingState(instance),
 				PostTestRPCCalls:              r.cfg.FullConfig.GetPostTestRPCCalls(instance),
+				PostTestSleepDuration:         r.cfg.FullConfig.GetPostTestSleepDuration(instance),
 			}
 
 			result, execErr = r.executor.ExecuteTests(execCtx, execOpts)
