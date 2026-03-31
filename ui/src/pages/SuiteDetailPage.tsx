@@ -1,9 +1,9 @@
-import { useCallback, useMemo, useState, useEffect } from 'react'
+import { useCallback, useMemo, useState, useEffect, useRef } from 'react'
 import { Link, useParams, useNavigate, useSearch } from '@tanstack/react-router'
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from '@headlessui/react'
 import clsx from 'clsx'
-import { ChevronRight, SquareStack, GitCompareArrows, LayoutGrid, Clock, Grid3X3, Trash2 } from 'lucide-react'
-import { type IndexStepType, ALL_INDEX_STEP_TYPES, DEFAULT_INDEX_STEP_FILTER, type SuiteTest } from '@/api/types'
+import { ChevronRight, SquareStack, GitCompareArrows, LayoutGrid, Clock, Grid3X3, Trash2, Plus, X } from 'lucide-react'
+import { type IndexEntry, type IndexStepType, ALL_INDEX_STEP_TYPES, DEFAULT_INDEX_STEP_FILTER, type SuiteTest } from '@/api/types'
 import { useSuite } from '@/api/hooks/useSuite'
 import { useSuiteStats } from '@/api/hooks/useSuiteStats'
 import { useIndex } from '@/api/hooks/useIndex'
@@ -19,6 +19,9 @@ import { OpcodeHeatmap } from '@/components/suite-detail/OpcodeHeatmap'
 import { RunsTable } from '@/components/runs/RunsTable'
 import { sortIndexEntries, type SortColumn, type SortDirection } from '@/components/runs/sortEntries'
 import { RunFilters, type TestStatusFilter } from '@/components/runs/RunFilters'
+import { parseLabelFilters, serializeLabelFilters, type LabelFilters } from '@/components/runs/labelFilterUtils'
+import { ClientBadge } from '@/components/shared/ClientBadge'
+import { getBaseClient } from '@/utils/client-colors'
 import { LoadingState, Spinner } from '@/components/shared/Spinner'
 import { ErrorState } from '@/components/shared/ErrorState'
 import { Badge } from '@/components/shared/Badge'
@@ -68,6 +71,183 @@ function OpcodeHeatmapSection({ tests, onTestClick }: { tests: SuiteTest[]; onTe
   )
 }
 
+// ---------------------------------------------------------------------------
+// ChartFilters — client toggles + label chip filters for the Run Charts
+// ---------------------------------------------------------------------------
+
+interface ChartFiltersProps {
+  clients: string[]
+  clientFilter: Set<string>
+  onClientFilterChange: (filter: Set<string>) => void
+  labelKeys: string[]
+  labelValues: Map<string, string[]>
+  labelFilters: Map<string, Set<string>>
+  onLabelFiltersChange: (filters: Map<string, Set<string>>) => void
+}
+
+function ChartFilters({
+  clients, clientFilter, onClientFilterChange,
+  labelKeys, labelValues, labelFilters, onLabelFiltersChange,
+}: ChartFiltersProps) {
+  const [keyDropdownOpen, setKeyDropdownOpen] = useState(false)
+  const [valueDropdownKey, setValueDropdownKey] = useState<string | null>(null)
+  const keyRef = useRef<HTMLDivElement>(null)
+  const valueRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (keyDropdownOpen && keyRef.current && !keyRef.current.contains(e.target as Node)) setKeyDropdownOpen(false)
+      if (valueDropdownKey && valueRef.current && !valueRef.current.contains(e.target as Node)) setValueDropdownKey(null)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [keyDropdownOpen, valueDropdownKey])
+
+  const toggleClient = (c: string) => {
+    const next = new Set(clientFilter)
+    if (next.has(c)) { next.delete(c) } else { next.add(c) }
+    onClientFilterChange(next)
+  }
+
+  const availableLabelKeys = labelKeys.filter((k) => !labelFilters.has(k) && k !== valueDropdownKey)
+
+  const toggleLabelValue = (key: string, value: string) => {
+    const next = new Map(labelFilters)
+    const values = new Set(next.get(key) ?? [])
+    if (values.has(value)) {
+      values.delete(value)
+      if (values.size === 0) next.delete(key)
+      else next.set(key, values)
+    } else {
+      values.add(value)
+      next.set(key, values)
+    }
+    onLabelFiltersChange(next)
+  }
+
+  const removeLabelFilter = (key: string) => {
+    const next = new Map(labelFilters)
+    next.delete(key)
+    onLabelFiltersChange(next)
+    if (valueDropdownKey === key) setValueDropdownKey(null)
+  }
+
+  const chipKeys = Array.from(labelFilters.keys())
+  if (valueDropdownKey && !labelFilters.has(valueDropdownKey)) chipKeys.push(valueDropdownKey)
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {/* Client toggles */}
+      {clients.map((c) => {
+        const active = clientFilter.size === 0 || clientFilter.has(c)
+        return (
+          <button
+            key={c}
+            onClick={() => toggleClient(c)}
+            className={clsx(
+              'transition-opacity',
+              !active && 'opacity-30 hover:opacity-60',
+            )}
+          >
+            <ClientBadge client={c} />
+          </button>
+        )
+      })}
+
+      {/* Label filter chips */}
+      {chipKeys.map((key) => {
+        const values = labelFilters.get(key)
+        const isPending = !values
+        return (
+          <div key={key} className="relative" ref={valueDropdownKey === key ? valueRef : undefined}>
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => setValueDropdownKey(valueDropdownKey === key ? null : key)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setValueDropdownKey(valueDropdownKey === key ? null : key) } }}
+              className={clsx(
+                'flex cursor-pointer items-center gap-1.5 rounded-xs border px-2 py-1 text-xs/5 font-medium transition-colors',
+                isPending
+                  ? 'border-dashed border-blue-300 bg-blue-50/50 text-blue-500 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-400'
+                  : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300 dark:hover:bg-blue-900/50',
+              )}
+            >
+              <span className="font-semibold">{key}</span>
+              {values && values.size > 0 && (
+                <>
+                  <span>=</span>
+                  <span>{Array.from(values).join(', ')}</span>
+                </>
+              )}
+              <button
+                onClick={(e) => { e.stopPropagation(); if (isPending) setValueDropdownKey(null); else removeLabelFilter(key) }}
+                className="ml-0.5 rounded-xs p-0.5 hover:bg-blue-200 dark:hover:bg-blue-800"
+              >
+                <X className="size-3" />
+              </button>
+            </div>
+            {valueDropdownKey === key && (
+              <div className="absolute top-full left-0 z-50 mt-1 max-h-64 min-w-48 overflow-y-auto rounded-xs border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+                {(labelValues.get(key) ?? []).map((val) => {
+                  const selected = values?.has(val) ?? false
+                  return (
+                    <button
+                      key={val}
+                      onClick={() => toggleLabelValue(key, val)}
+                      className={clsx(
+                        'flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm/6 transition-colors',
+                        selected
+                          ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
+                          : 'text-gray-700 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700',
+                      )}
+                    >
+                      <span className={clsx(
+                        'flex size-4 shrink-0 items-center justify-center rounded-xs border text-xs/3',
+                        selected
+                          ? 'border-blue-500 bg-blue-500 text-white dark:border-blue-400 dark:bg-blue-400'
+                          : 'border-gray-300 dark:border-gray-600',
+                      )}>
+                        {selected && '✓'}
+                      </span>
+                      {val}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )
+      })}
+
+      {/* Add label filter button */}
+      {availableLabelKeys.length > 0 && (
+        <div className="relative" ref={keyRef}>
+          <button
+            onClick={() => { setKeyDropdownOpen(!keyDropdownOpen); setValueDropdownKey(null) }}
+            className="flex items-center gap-1 rounded-xs border border-dashed border-gray-300 px-2 py-1 text-xs/5 text-gray-500 transition-colors hover:border-gray-400 hover:text-gray-700 dark:border-gray-600 dark:text-gray-400 dark:hover:border-gray-500 dark:hover:text-gray-300"
+          >
+            <Plus className="size-3" />
+            Label
+          </button>
+          {keyDropdownOpen && (
+            <div className="absolute top-full left-0 z-50 mt-1 min-w-36 overflow-hidden rounded-xs border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+              {availableLabelKeys.map((key) => (
+                <button
+                  key={key}
+                  onClick={() => { setKeyDropdownOpen(false); setValueDropdownKey(key) }}
+                  className="flex w-full px-3 py-1.5 text-left text-sm/6 text-gray-700 transition-colors hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700"
+                >
+                  {key}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function SuiteDetailPage() {
   const { suiteHash } = useParams({ from: '/suites/$suiteHash' })
   const navigate = useNavigate()
@@ -88,6 +268,7 @@ export function SuiteDetailPage() {
     chartPassingOnly?: string
     heatmapColor?: ColorNormalization
     steps?: string
+    labels?: string
     hq?: string
     hn?: string
     hr?: string
@@ -97,10 +278,12 @@ export function SuiteDetailPage() {
     hTh?: string
     hRpc?: string
     hPs?: string
+    groupBy?: string
   }
-  const { tab, client, image, status = 'all', sortBy = 'timestamp', sortDir = 'desc', filesPage, detail, opcodeSort, q, chartMode = 'runCount', heatmapColor = 'suite', hq, hn, hr, hFs, hStat, hCs, hTh, hRpc, hPs } = search
+  const { tab, client, image, status = 'all', sortBy = 'timestamp', sortDir = 'desc', filesPage, detail, opcodeSort, q, chartMode = 'runCount', heatmapColor = 'suite', hq, hn, hr, hFs, hStat, hCs, hTh, hRpc, hPs, groupBy } = search
   const chartPassingOnly = search.chartPassingOnly !== 'false'
   const stepFilter = parseStepFilter(search.steps)
+  const labelFilters = parseLabelFilters(search.labels)
   const { data: suite, isLoading, error, refetch } = useSuite(suiteHash)
   const { data: suiteStats, isLoading: suiteStatsLoading } = useSuiteStats(suiteHash)
   const { data: index } = useIndex()
@@ -173,6 +356,8 @@ export function SuiteDetailPage() {
   const [heatmapExpanded, setHeatmapExpanded] = useState(true)
   const [chartExpanded, setChartExpanded] = useState(true)
   const [chartZoomRange, setChartZoomRange] = useState({ start: 0, end: 100 })
+  const [chartClientFilter, setChartClientFilter] = useState<Set<string>>(new Set())
+  const [chartLabelFilters, setChartLabelFilters] = useState<Map<string, Set<string>>>(new Map())
   const handleChartZoomChange = useCallback((range: { start: number; end: number }) => {
     setChartZoomRange(range)
   }, [])
@@ -195,16 +380,86 @@ export function SuiteDetailPage() {
     return index.entries.filter((entry) => entry.suite_hash === suiteHash)
   }, [index, suiteHash])
 
+  // Collect available label keys for the group-by selector
+  const groupByLabelKeys = useMemo(() => {
+    const keys = new Set<string>()
+    for (const run of suiteRunsAll) {
+      if (run.metadata) {
+        for (const key of Object.keys(run.metadata)) {
+          if (!key.startsWith('github.') && key !== 'name') keys.add(key)
+        }
+      }
+    }
+    return Array.from(keys).sort()
+  }, [suiteRunsAll])
+
+  // Apply grouping: transforms client name to include the group suffix
+  const applyGrouping = useCallback((runs: IndexEntry[]): IndexEntry[] => {
+    if (!groupBy) return runs
+    return runs.map((run) => {
+      let suffix: string
+      if (groupBy === 'instance_id') {
+        suffix = run.instance.id
+      } else {
+        suffix = run.metadata?.[groupBy] ?? '(none)'
+      }
+      return {
+        ...run,
+        instance: { ...run.instance, client: `${run.instance.client} / ${suffix}` },
+      }
+    })
+  }, [groupBy])
+
+  const groupedRunsAll = useMemo(() => applyGrouping(suiteRunsAll), [suiteRunsAll, applyGrouping])
+
   // Filter to only completed runs for metrics (exclude container_died, cancelled)
   // Runs without status are considered completed (backward compatibility)
   const completedRuns = useMemo(() => {
-    return suiteRunsAll.filter((entry) => !entry.status || entry.status === 'completed')
-  }, [suiteRunsAll])
+    return groupedRunsAll.filter((entry) => !entry.status || entry.status === 'completed')
+  }, [groupedRunsAll])
 
-  const chartRuns = useMemo(() => {
+  const chartRunsBase = useMemo(() => {
     if (!chartPassingOnly) return completedRuns
     return completedRuns.filter((entry) => entry.tests.tests_total === entry.tests.tests_passed)
   }, [completedRuns, chartPassingOnly])
+
+  // Derive available base clients and label keys/values for chart filtering
+  const { chartClients, chartLabelKeys, chartLabelValues } = useMemo(() => {
+    const clientSet = new Set<string>()
+    const valMap = new Map<string, Set<string>>()
+    for (const run of chartRunsBase) {
+      clientSet.add(getBaseClient(run.instance.client))
+      if (run.metadata) {
+        for (const [key, value] of Object.entries(run.metadata)) {
+          if (key.startsWith('github.') || key === 'name') continue
+          let set = valMap.get(key)
+          if (!set) { set = new Set(); valMap.set(key, set) }
+          set.add(value)
+        }
+      }
+    }
+    const keys = Array.from(valMap.keys()).sort()
+    const values = new Map<string, string[]>()
+    for (const [key, set] of valMap) values.set(key, Array.from(set).sort())
+    return { chartClients: Array.from(clientSet).sort(), chartLabelKeys: keys, chartLabelValues: values }
+  }, [chartRunsBase])
+
+  const chartRuns = useMemo(() => {
+    let runs = chartRunsBase
+    if (chartClientFilter.size > 0) {
+      runs = runs.filter((r) => chartClientFilter.has(getBaseClient(r.instance.client)))
+    }
+    if (chartLabelFilters.size > 0) {
+      runs = runs.filter((r) => {
+        for (const [key, allowed] of chartLabelFilters) {
+          const actual = r.metadata?.[key]
+          if (!actual || !allowed.has(actual)) return false
+        }
+        return true
+      })
+    }
+    return runs
+  }, [chartRunsBase, chartClientFilter, chartLabelFilters])
 
   const clients = useMemo(() => {
     const clientSet = new Set(suiteRunsAll.map((e) => e.instance.client))
@@ -242,9 +497,13 @@ export function SuiteDetailPage() {
       if (status === 'failing' && e.tests.tests_total - e.tests.tests_passed === 0) return false
       if (status === 'timeout' && e.status !== 'timeout') return false
       if (status === 'cancelled' && e.status !== 'cancelled') return false
+      for (const [key, allowedValues] of labelFilters) {
+        const actual = e.metadata?.[key]
+        if (!actual || !allowedValues.has(actual)) return false
+      }
       return true
     })
-  }, [suiteRunsAll, client, image, status])
+  }, [suiteRunsAll, client, image, status, labelFilters])
 
   const sortedRuns = useMemo(() => sortIndexEntries(filteredRuns, sortBy, sortDir, stepFilter), [filteredRuns, sortBy, sortDir, stepFilter])
   const totalRunsPages = Math.ceil(sortedRuns.length / runsPageSize)
@@ -260,7 +519,7 @@ export function SuiteDetailPage() {
     navigate({
       to: '/suites/$suiteHash',
       params: { suiteHash },
-      search: { tab, client: newClient, image, status, sortBy, sortDir, steps: serializeStepFilter(stepFilter) },
+      search: { tab, client: newClient, image, status, sortBy, sortDir, steps: serializeStepFilter(stepFilter), labels: serializeLabelFilters(labelFilters), groupBy },
     })
   }
 
@@ -269,7 +528,7 @@ export function SuiteDetailPage() {
     navigate({
       to: '/suites/$suiteHash',
       params: { suiteHash },
-      search: { tab, client, image: newImage, status, sortBy, sortDir, steps: serializeStepFilter(stepFilter) },
+      search: { tab, client, image: newImage, status, sortBy, sortDir, steps: serializeStepFilter(stepFilter), labels: serializeLabelFilters(labelFilters), groupBy },
     })
   }
 
@@ -278,7 +537,16 @@ export function SuiteDetailPage() {
     navigate({
       to: '/suites/$suiteHash',
       params: { suiteHash },
-      search: { tab, client, image, status: newStatus, sortBy, sortDir, steps: serializeStepFilter(stepFilter) },
+      search: { tab, client, image, status: newStatus, sortBy, sortDir, steps: serializeStepFilter(stepFilter), labels: serializeLabelFilters(labelFilters), groupBy },
+    })
+  }
+
+  const handleLabelFiltersChange = (newFilters: LabelFilters) => {
+    setRunsPage(1)
+    navigate({
+      to: '/suites/$suiteHash',
+      params: { suiteHash },
+      search: { tab, client, image, status, sortBy, sortDir, steps: serializeStepFilter(stepFilter), labels: serializeLabelFilters(newFilters), groupBy },
     })
   }
 
@@ -320,7 +588,7 @@ export function SuiteDetailPage() {
     navigate({
       to: '/suites/$suiteHash',
       params: { suiteHash },
-      search: { tab: newTab, client, image, status, sortBy, sortDir, filesPage: undefined, detail: undefined, opcodeSort: undefined, q: undefined },
+      search: { tab: newTab, client, image, status, sortBy, sortDir, filesPage: undefined, detail: undefined, opcodeSort: undefined, q: undefined, groupBy },
     })
   }
 
@@ -329,7 +597,7 @@ export function SuiteDetailPage() {
     navigate({
       to: '/suites/$suiteHash',
       params: { suiteHash },
-      search: { tab, client, image, status, sortBy: newSortBy, sortDir: newSortDir, steps: serializeStepFilter(stepFilter) },
+      search: { tab, client, image, status, sortBy: newSortBy, sortDir: newSortDir, steps: serializeStepFilter(stepFilter), labels: serializeLabelFilters(labelFilters), groupBy },
     })
   }
 
@@ -337,7 +605,7 @@ export function SuiteDetailPage() {
     navigate({
       to: '/suites/$suiteHash',
       params: { suiteHash },
-      search: { tab, client, image, status, sortBy, sortDir, filesPage: page, q, steps: serializeStepFilter(stepFilter) },
+      search: { tab, client, image, status, sortBy, sortDir, filesPage: page, q, steps: serializeStepFilter(stepFilter), labels: serializeLabelFilters(labelFilters), groupBy },
     })
   }
 
@@ -345,7 +613,7 @@ export function SuiteDetailPage() {
     navigate({
       to: '/suites/$suiteHash',
       params: { suiteHash },
-      search: { tab, client, image, status, sortBy, sortDir, filesPage: 1, q: query || undefined, chartMode, steps: serializeStepFilter(stepFilter) },
+      search: { tab, client, image, status, sortBy, sortDir, filesPage: 1, q: query || undefined, chartMode, steps: serializeStepFilter(stepFilter), labels: serializeLabelFilters(labelFilters), groupBy },
     })
   }
 
@@ -353,7 +621,7 @@ export function SuiteDetailPage() {
     navigate({
       to: '/suites/$suiteHash',
       params: { suiteHash },
-      search: { tab, client, image, status, sortBy, sortDir, filesPage, detail: index, opcodeSort, q, steps: serializeStepFilter(stepFilter) },
+      search: { tab, client, image, status, sortBy, sortDir, filesPage, detail: index, opcodeSort, q, steps: serializeStepFilter(stepFilter), labels: serializeLabelFilters(labelFilters), groupBy },
     })
   }
 
@@ -361,7 +629,7 @@ export function SuiteDetailPage() {
     navigate({
       to: '/suites/$suiteHash',
       params: { suiteHash },
-      search: { tab, client, image, status, sortBy, sortDir, filesPage, detail, opcodeSort: sort === 'name' ? undefined : sort, q, steps: serializeStepFilter(stepFilter) },
+      search: { tab, client, image, status, sortBy, sortDir, filesPage, detail, opcodeSort: sort === 'name' ? undefined : sort, q, steps: serializeStepFilter(stepFilter), labels: serializeLabelFilters(labelFilters), groupBy },
     })
   }
 
@@ -371,7 +639,7 @@ export function SuiteDetailPage() {
     navigate({
       to: '/suites/$suiteHash',
       params: { suiteHash },
-      search: { tab, client, image, status, sortBy, sortDir, chartMode: mode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(stepFilter) },
+      search: { tab, client, image, status, sortBy, sortDir, chartMode: mode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(stepFilter), labels: serializeLabelFilters(labelFilters), groupBy },
     })
   }
 
@@ -379,7 +647,7 @@ export function SuiteDetailPage() {
     navigate({
       to: '/suites/$suiteHash',
       params: { suiteHash },
-      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: passingOnly ? undefined : 'false', heatmapColor, steps: serializeStepFilter(stepFilter) },
+      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: passingOnly ? undefined : 'false', heatmapColor, steps: serializeStepFilter(stepFilter), labels: serializeLabelFilters(labelFilters), groupBy },
     })
   }
 
@@ -387,7 +655,7 @@ export function SuiteDetailPage() {
     navigate({
       to: '/suites/$suiteHash',
       params: { suiteHash },
-      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor: mode, steps: serializeStepFilter(stepFilter) },
+      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor: mode, steps: serializeStepFilter(stepFilter), labels: serializeLabelFilters(labelFilters), groupBy },
     })
   }
 
@@ -395,7 +663,7 @@ export function SuiteDetailPage() {
     navigate({
       to: '/suites/$suiteHash',
       params: { suiteHash },
-      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(stepFilter), hq: query || undefined, hn, hr, hFs, hStat, hCs, hTh, hRpc, hPs },
+      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(stepFilter), hq: query || undefined, hn, hr, hFs, hStat, hCs, hTh, hRpc, hPs, groupBy },
     })
   }
 
@@ -403,7 +671,7 @@ export function SuiteDetailPage() {
     navigate({
       to: '/suites/$suiteHash',
       params: { suiteHash },
-      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(stepFilter), hq, hn: show ? '1' : undefined, hr, hFs, hStat, hCs, hTh, hRpc, hPs },
+      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(stepFilter), hq, hn: show ? '1' : undefined, hr, hFs, hStat, hCs, hTh, hRpc, hPs, groupBy },
     })
   }
 
@@ -411,7 +679,7 @@ export function SuiteDetailPage() {
     navigate({
       to: '/suites/$suiteHash',
       params: { suiteHash },
-      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(stepFilter), hq, hn, hr: useRegex ? '1' : undefined, hFs, hStat, hCs, hTh, hRpc, hPs },
+      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(stepFilter), hq, hn, hr: useRegex ? '1' : undefined, hFs, hStat, hCs, hTh, hRpc, hPs, groupBy },
     })
   }
 
@@ -419,7 +687,7 @@ export function SuiteDetailPage() {
     navigate({
       to: '/suites/$suiteHash',
       params: { suiteHash },
-      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(stepFilter), hq, hn, hr, hFs: fs ? '1' : undefined, hStat, hCs, hTh, hRpc, hPs },
+      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(stepFilter), hq, hn, hr, hFs: fs ? '1' : undefined, hStat, hCs, hTh, hRpc, hPs, groupBy },
     })
   }
 
@@ -427,7 +695,7 @@ export function SuiteDetailPage() {
     navigate({
       to: '/suites/$suiteHash',
       params: { suiteHash },
-      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(stepFilter), hq, hn, hr, hFs, hStat: stat === 'avgMgas' ? undefined : stat, hCs, hTh, hRpc, hPs },
+      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(stepFilter), hq, hn, hr, hFs, hStat: stat === 'avgMgas' ? undefined : stat, hCs, hTh, hRpc, hPs, groupBy },
     })
   }
 
@@ -435,7 +703,7 @@ export function SuiteDetailPage() {
     navigate({
       to: '/suites/$suiteHash',
       params: { suiteHash },
-      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(stepFilter), hq, hn, hr, hFs, hStat, hCs: show ? '1' : undefined, hTh, hRpc, hPs },
+      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(stepFilter), hq, hn, hr, hFs, hStat, hCs: show ? '1' : undefined, hTh, hRpc, hPs, groupBy },
     })
   }
 
@@ -443,7 +711,7 @@ export function SuiteDetailPage() {
     navigate({
       to: '/suites/$suiteHash',
       params: { suiteHash },
-      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(stepFilter), hq, hn, hr, hFs, hStat, hCs, hTh: th === 60 ? undefined : String(th), hRpc, hPs },
+      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(stepFilter), hq, hn, hr, hFs, hStat, hCs, hTh: th === 60 ? undefined : String(th), hRpc, hPs, groupBy },
     })
   }
 
@@ -451,7 +719,7 @@ export function SuiteDetailPage() {
     navigate({
       to: '/suites/$suiteHash',
       params: { suiteHash },
-      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(stepFilter), hq, hn, hr, hFs, hStat, hCs, hTh, hRpc: count === 5 ? undefined : String(count), hPs },
+      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(stepFilter), hq, hn, hr, hFs, hStat, hCs, hTh, hRpc: count === 5 ? undefined : String(count), hPs, groupBy },
     })
   }
 
@@ -459,7 +727,15 @@ export function SuiteDetailPage() {
     navigate({
       to: '/suites/$suiteHash',
       params: { suiteHash },
-      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(stepFilter), hq, hn, hr, hFs, hStat, hCs, hTh, hRpc, hPs: size === 20 ? undefined : String(size) },
+      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(stepFilter), hq, hn, hr, hFs, hStat, hCs, hTh, hRpc, hPs: size === 20 ? undefined : String(size), groupBy },
+    })
+  }
+
+  const handleGroupByChange = (key: string | undefined) => {
+    navigate({
+      to: '/suites/$suiteHash',
+      params: { suiteHash },
+      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(stepFilter), labels: serializeLabelFilters(labelFilters), groupBy: key },
     })
   }
 
@@ -467,7 +743,7 @@ export function SuiteDetailPage() {
     navigate({
       to: '/suites/$suiteHash',
       params: { suiteHash },
-      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(steps) },
+      search: { tab, client, image, status, sortBy, sortDir, chartMode, chartPassingOnly: chartPassingOnlyParam, heatmapColor, steps: serializeStepFilter(steps), labels: serializeLabelFilters(labelFilters), groupBy },
     })
   }
 
@@ -590,35 +866,74 @@ export function SuiteDetailPage() {
               </p>
             ) : (
               <div className="flex flex-col gap-4">
-                {/* Step Filter Control */}
-                <div className="flex flex-wrap items-center gap-2 rounded-xs bg-white p-2 shadow-xs sm:gap-3 sm:p-3 dark:bg-gray-800">
-                  <span className="text-xs/5 font-medium text-gray-700 sm:text-sm/6 dark:text-gray-300">Metric steps:</span>
-                  <div className="flex items-center gap-1">
-                    {ALL_INDEX_STEP_TYPES.map((step) => (
-                      <button
-                        key={step}
-                        onClick={() => {
-                          const newFilter = stepFilter.includes(step)
-                            ? stepFilter.filter((s) => s !== step)
-                            : [...stepFilter, step]
-                          if (newFilter.length > 0) {
-                            handleStepFilterChange(newFilter)
-                          }
-                        }}
-                        className={`rounded-xs px-2 py-0.5 text-xs font-medium capitalize transition-colors sm:px-2.5 sm:py-1 ${
-                          stepFilter.includes(step)
-                            ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300'
-                            : 'bg-gray-100 text-gray-400 dark:bg-gray-700 dark:text-gray-500'
-                        }`}
-                        title={`${stepFilter.includes(step) ? 'Exclude' : 'Include'} ${step} step in metric calculations`}
-                      >
-                        {step}
-                      </button>
-                    ))}
+                {/* Step Filter & Group By Controls */}
+                <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xs bg-white p-2 shadow-xs sm:p-3 dark:bg-gray-800">
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                    <span className="text-xs/5 font-medium text-gray-700 sm:text-sm/6 dark:text-gray-300">Metric steps:</span>
+                    <div className="flex items-center gap-1">
+                      {ALL_INDEX_STEP_TYPES.map((step) => (
+                        <button
+                          key={step}
+                          onClick={() => {
+                            const newFilter = stepFilter.includes(step)
+                              ? stepFilter.filter((s) => s !== step)
+                              : [...stepFilter, step]
+                            if (newFilter.length > 0) {
+                              handleStepFilterChange(newFilter)
+                            }
+                          }}
+                          className={`rounded-xs px-2 py-0.5 text-xs font-medium capitalize transition-colors sm:px-2.5 sm:py-1 ${
+                            stepFilter.includes(step)
+                              ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300'
+                              : 'bg-gray-100 text-gray-400 dark:bg-gray-700 dark:text-gray-500'
+                          }`}
+                          title={`${stepFilter.includes(step) ? 'Exclude' : 'Include'} ${step} step in metric calculations`}
+                        >
+                          {step}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                  <span className="hidden text-xs text-gray-500 sm:inline dark:text-gray-400">
-                    (affects Duration, MGas/s calculations)
-                  </span>
+                  {groupByLabelKeys.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                      <span className="text-xs/5 font-medium text-gray-700 sm:text-sm/6 dark:text-gray-300">Group by:</span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => handleGroupByChange(undefined)}
+                          className={`rounded-xs px-2 py-0.5 text-xs font-medium transition-colors sm:px-2.5 sm:py-1 ${
+                            !groupBy
+                              ? 'bg-gray-800 text-white dark:bg-gray-200 dark:text-gray-900'
+                              : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:hover:bg-gray-600'
+                          }`}
+                        >
+                          None
+                        </button>
+                        {groupByLabelKeys.map((key) => (
+                          <button
+                            key={key}
+                            onClick={() => handleGroupByChange(key)}
+                            className={`rounded-xs px-2 py-0.5 text-xs font-medium transition-colors sm:px-2.5 sm:py-1 ${
+                              groupBy === key
+                                ? 'bg-gray-800 text-white dark:bg-gray-200 dark:text-gray-900'
+                                : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:hover:bg-gray-600'
+                            }`}
+                          >
+                            {key}
+                          </button>
+                        ))}
+                        <button
+                          onClick={() => handleGroupByChange('instance_id')}
+                          className={`rounded-xs px-2 py-0.5 text-xs font-medium transition-colors sm:px-2.5 sm:py-1 ${
+                            groupBy === 'instance_id'
+                              ? 'bg-gray-800 text-white dark:bg-gray-200 dark:text-gray-900'
+                              : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:hover:bg-gray-600'
+                          }`}
+                        >
+                          instance id
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div className="overflow-hidden rounded-xs border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
                   <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 sm:px-4 sm:py-3">
@@ -658,7 +973,56 @@ export function SuiteDetailPage() {
                   </div>
                   {heatmapExpanded && (
                     <div className="border-t border-gray-200 p-3 sm:p-4 dark:border-gray-700">
-                      <RunsHeatmap runs={suiteRunsAll} isDark={isDark} colorNormalization={heatmapColor} onColorNormalizationChange={handleHeatmapColorChange} stepFilter={stepFilter} selectable={compareMode} selectedRunIds={selectedRunIds} onSelectionChange={handleSelectionChange} />
+                      <RunsHeatmap
+                        runs={suiteRunsAll}
+                        groupBy={groupBy}
+                        onCompareGroup={groupBy ? (groupRuns) => {
+                          const sorted = [...groupRuns].sort((a, b) => b.timestamp - a.timestamp)
+                          const seen = new Set<string>()
+                          const ids: string[] = []
+                          for (const run of sorted) {
+                            if (seen.has(run.instance.client)) continue
+                            if (run.tests.tests_total > 0 && run.tests.tests_passed === run.tests.tests_total) {
+                              seen.add(run.instance.client)
+                              ids.push(run.run_id)
+                            }
+                            if (ids.length >= MAX_COMPARE_RUNS) break
+                          }
+                          if (ids.length >= MIN_COMPARE_RUNS) {
+                            navigate({ to: '/compare', search: { runs: ids.join(',') } })
+                          }
+                        } : undefined}
+                        onCompareClientAcrossGroups={groupBy ? (client) => {
+                          // Find the latest successful run for this client in each group
+                          const sorted = [...suiteRunsAll]
+                            .filter((r) => r.instance.client === client)
+                            .sort((a, b) => b.timestamp - a.timestamp)
+                          const seenGroups = new Set<string>()
+                          const ids: string[] = []
+                          for (const run of sorted) {
+                            const groupValue = groupBy === 'instance_id'
+                              ? run.instance.id
+                              : (run.metadata?.[groupBy] ?? '(none)')
+                            if (seenGroups.has(groupValue)) continue
+                            if (run.tests.tests_total > 0 && run.tests.tests_passed === run.tests.tests_total) {
+                              seenGroups.add(groupValue)
+                              ids.push(run.run_id)
+                            }
+                            if (ids.length >= MAX_COMPARE_RUNS) break
+                          }
+                          if (ids.length >= MIN_COMPARE_RUNS) {
+                            const labels = groupBy === 'instance_id' ? 'instance-id' : `label:${groupBy}`
+                            navigate({ to: '/compare', search: { runs: ids.join(','), labels } })
+                          }
+                        } : undefined}
+                        isDark={isDark}
+                        colorNormalization={heatmapColor}
+                        onColorNormalizationChange={handleHeatmapColorChange}
+                        stepFilter={stepFilter}
+                        selectable={compareMode}
+                        selectedRunIds={selectedRunIds}
+                        onSelectionChange={handleSelectionChange}
+                      />
                     </div>
                   )}
                 </div>
@@ -718,6 +1082,18 @@ export function SuiteDetailPage() {
                           </button>
                         </div>
                       </div>
+                      {/* Chart filters: client toggles + label chips */}
+                      {(chartClients.length > 1 || chartLabelKeys.length > 0) && (
+                        <ChartFilters
+                          clients={chartClients}
+                          clientFilter={chartClientFilter}
+                          onClientFilterChange={setChartClientFilter}
+                          labelKeys={chartLabelKeys}
+                          labelValues={chartLabelValues}
+                          labelFilters={chartLabelFilters}
+                          onLabelFiltersChange={setChartLabelFilters}
+                        />
+                      )}
                       <div className="flex items-center gap-3">
                         <div className="h-px grow bg-gray-200 dark:bg-gray-700" />
                         <span className="text-xs font-medium text-gray-400 dark:text-gray-500">Performance</span>
@@ -784,6 +1160,9 @@ export function SuiteDetailPage() {
                     onImageChange={handleImageChange}
                     selectedStatus={status}
                     onStatusChange={handleStatusChange}
+                    entries={suiteRunsAll}
+                    labelFilters={labelFilters}
+                    onLabelFiltersChange={handleLabelFiltersChange}
                   />
                 </div>
                 {filteredRuns.length === 0 ? (
