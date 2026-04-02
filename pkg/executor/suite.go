@@ -81,6 +81,7 @@ type SuiteTest struct {
 	Test        *SuiteFile     `json:"test,omitempty"`
 	Cleanup     *SuiteFile     `json:"cleanup,omitempty"`
 	EEST        *SuiteTestEEST `json:"eest,omitempty"`
+	OpcodeCount map[string]int `json:"opcode_count,omitempty"`
 }
 
 // ComputeSuiteHash computes a hash of all test file contents.
@@ -183,6 +184,12 @@ func CreateSuiteOutput(
 
 			if test.EESTInfo != nil {
 				suiteTest.EEST = &SuiteTestEEST{Info: test.EESTInfo}
+				suiteTest.OpcodeCount = test.EESTInfo.OpcodeCount
+			}
+
+			// External opcode data takes precedence over EEST-derived opcodes.
+			if test.OpcodeCount != nil {
+				suiteTest.OpcodeCount = test.OpcodeCount
 			}
 
 			// Create test directory.
@@ -234,6 +241,10 @@ func CreateSuiteOutput(
 			var existing SuiteInfo
 			if jsonErr := json.Unmarshal(existingData, &existing); jsonErr == nil {
 				info.PreRunSteps = existing.PreRunSteps
+
+				// Merge opcode data from prepared tests into existing entries.
+				mergeOpcodeData(existing.Tests, prepared)
+
 				info.Tests = existing.Tests
 			}
 		}
@@ -345,4 +356,31 @@ func GetGitCommitSHA(repoPath string) (string, error) {
 	}
 
 	return sha, nil
+}
+
+// mergeOpcodeData updates existing suite tests with opcode data from
+// the current prepared source. This is needed when the suite directory
+// already exists on disk and we re-read its summary.json — the old
+// entries won't have opcode_count if the feature was added after the
+// suite was first created.
+func mergeOpcodeData(existing []SuiteTest, prepared *PreparedSource) {
+	if prepared == nil {
+		return
+	}
+
+	opcodeByName := make(map[string]map[string]int, len(prepared.Tests))
+
+	for _, t := range prepared.Tests {
+		if t.OpcodeCount != nil {
+			opcodeByName[t.Name] = t.OpcodeCount
+		} else if t.EESTInfo != nil && t.EESTInfo.OpcodeCount != nil {
+			opcodeByName[t.Name] = t.EESTInfo.OpcodeCount
+		}
+	}
+
+	for i := range existing {
+		if counts, ok := opcodeByName[existing[i].Name]; ok {
+			existing[i].OpcodeCount = counts
+		}
+	}
 }
